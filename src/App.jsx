@@ -1,130 +1,123 @@
-// client/src/App.jsx
-import React, { useEffect, useState } from 'react';
-import socket from './socket';
-import './App.css';
+import React, { useState, useEffect } from "react";
+import { io } from "socket.io-client";
+import "./App.css";
 
-const BINGO_CARD = [
-  [5, 12, -1, 37, 50],   // B column (with FREE space)
-  [3, 14, 25, 38, 60],   // I column
-  [9, 16, -1, 44, 65],   // N column (with FREE space)
-  [11, 22, 31, 41, 72],  // G column
-  [2, 18, 30, 48, 70]    // O column
-];
+const socket = io("http://localhost:3001");
 
-const getBingoLetter = (number) => {
-  if (number >= 1 && number <= 15) return 'B';
-  if (number >= 16 && number <= 30) return 'I';
-  if (number >= 31 && number <= 45) return 'N';
-  if (number >= 46 && number <= 60) return 'G';
-  if (number >= 61 && number <= 75) return 'O';
-  return '';
-};
-
-const App = () => {
+function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [username, setUsername] = useState("");
+  const [error, setError] = useState("");
+  const [bingoCard, setBingoCard] = useState([]);
   const [drawnNumbers, setDrawnNumbers] = useState([]);
   const [lastNumber, setLastNumber] = useState(null);
-  const [currentPattern, setCurrentPattern] = useState('line');
-  const [bingo, setBingo] = useState(false);
-  const [gameActive, setGameActive] = useState(true);
+  const [currentPattern, setCurrentPattern] = useState("line");
+  const [bingoClaimed, setBingoClaimed] = useState(false);
+  const [playerName, setPlayerName] = useState("");
+  const [winner, setWinner] = useState("");
+  const [users, setUsers] = useState({});
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch("http://localhost:3001/auth", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        socket.emit("authenticate", username);
+        setPlayerName(username);
+        setIsAuthenticated(true);
+      } else {
+        setError(data.error || "Authentication failed");
+      }
+    } catch (err) {
+      setError("Connection error. Please try again.");
+    }
+  };
 
   useEffect(() => {
-    socket.on('init-game', ({ drawnNumbers, gameActive, currentPattern }) => {
-      setDrawnNumbers(drawnNumbers);
-      setGameActive(gameActive);
-      setCurrentPattern(currentPattern);
+    socket.on("authentication-success", (data) => {
+      setBingoCard(data.card);
+      setDrawnNumbers(data.drawnNumbers);
     });
 
-    socket.on('number-drawn', (number) => {
+    socket.on("number-drawn", (number) => {
       setLastNumber(number);
-      setDrawnNumbers(prev => [...prev, number]);
+      setDrawnNumbers((prev) => [...prev, number]);
     });
 
-    socket.on('pattern-change', (pattern) => {
-      setCurrentPattern(pattern);
+    socket.on("bingo-claimed", ({ username, pattern }) => {
+      setWinner(username);
+      setBingoClaimed(true);
+      if (username === playerName) {
+        setBingoClaimed(true);
+      }
     });
-
-    socket.on('game-restart', () => {
-      setDrawnNumbers([]);
-      setBingo(false);
-      setCurrentPattern('line');
-      setGameActive(true);
+    socket.on("users-update", (userList) => {
+      setUsers(userList);
     });
 
     return () => {
-      socket.off('number-drawn');
-      socket.off('pattern-change');
-      socket.off('game-restart');
+      socket.off("authentication-success");
+      socket.off("number-drawn");
+      socket.off("bingo-claimed");
+      socket.off("users-update");
     };
-  }, []);
-
-  useEffect(() => {
-    checkBingo();
-  }, [drawnNumbers]);
-
-  const checkBingo = () => {
-    // Check if any line is complete (horizontal, vertical, diagonal)
-    if (currentPattern === 'line') {
-      // Check horizontals
-      for (let row = 0; row < 5; row++) {
-        if (BINGO_CARD[row].every((num, col) => 
-          num === -1 || drawnNumbers.includes(num) || (row === 2 && col === 2))) {
-          return setBingo(true);
-        }
-      }
-
-      // Check verticals
-      for (let col = 0; col < 5; col++) {
-        if (BINGO_CARD.every((row, rowIdx) => 
-          row[col] === -1 || drawnNumbers.includes(row[col]) || (rowIdx === 2 && col === 2))) {
-          return setBingo(true);
-        }
-      }
-
-      // Check diagonals
-      if ([0,1,2,3,4].every(i => 
-        BINGO_CARD[i][i] === -1 || drawnNumbers.includes(BINGO_CARD[i][i]) || (i === 2)) ||
-        [0,1,2,3,4].every(i => 
-          BINGO_CARD[i][4-i] === -1 || drawnNumbers.includes(BINGO_CARD[i][4-i]) || (i === 2))) {
-        return setBingo(true);
-      }
-    }
-
-    // Check full house (all numbers marked)
-    if (currentPattern === 'full-house') {
-      const allMarked = BINGO_CARD.flat().every(num => 
-        num === -1 || drawnNumbers.includes(num));
-      if (allMarked) setBingo(true);
-    }
-  };
-
+  }, [playerName]);
   const getCellClass = (number, rowIdx, colIdx) => {
-    let className = 'cell';
-    
-    // Free space
+    let className = "cell";
+
     if (number === -1 || (rowIdx === 2 && colIdx === 2)) {
-      className += ' free';
-    } 
-    // Marked number
-    else if (drawnNumbers.includes(number)) {
-      className += ' marked';
+      className += " free";
+    } else if (drawnNumbers.includes(number)) {
+      className += " marked";
     }
-    
-    // Last drawn number
+
     if (number === lastNumber) {
-      className += ' last-called';
+      className += " last-called";
     }
-    
+
     return className;
   };
 
-  const restartGame = () => {
-    socket.emit('restart-game');
+  const claimBingo = (pattern) => {
+    if (playerName) {
+      socket.emit("claim-bingo", { username: playerName, pattern });
+    }
   };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="login-container">
+        <h1>Bingo Game Login</h1>
+        <form onSubmit={handleLogin}>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Enter your username"
+            required
+          />
+          {error && <div className="error">{error}</div>}
+          <button type="submit">Login</button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
-      <h1>75-Ball Bingo</h1>
-      
+      <div className="user-header">
+        <h2>Welcome, {playerName}!</h2>
+      </div>
+
       <div className="game-info">
         <div className="last-called">
           {lastNumber ? (
@@ -133,45 +126,84 @@ const App = () => {
               <span className="number">{lastNumber}</span>
             </>
           ) : (
-            <span>Let's play!</span>
+            <span>Waiting for first number...</span>
           )}
         </div>
-        <div className="pattern">Current pattern: {currentPattern.replace('-', ' ')}</div>
+        <div className="pattern">Current pattern: {currentPattern}</div>
       </div>
 
       <div className="bingo-card">
         <div className="header">
-          {['B', 'I', 'N', 'G', 'O'].map(letter => (
-            <div key={letter} className="header-cell">{letter}</div>
+          {["B", "I", "N", "G", "O"].map((letter) => (
+            <div key={letter} className="header-cell">
+              {letter}
+            </div>
           ))}
         </div>
-        
-        {[0, 1, 2, 3, 4].map(rowIdx => (
+
+        {[0, 1, 2, 3, 4].map((rowIdx) => (
           <div key={rowIdx} className="row">
-            {BINGO_CARD.map((col, colIdx) => (
-              <div 
-                key={colIdx} 
+            {bingoCard.map((col, colIdx) => (
+              <div
+                key={colIdx}
                 className={getCellClass(col[rowIdx], rowIdx, colIdx)}
               >
-                {col[rowIdx] === -1 ? 'FREE' : col[rowIdx]}
+                {col[rowIdx] === -1 ? "FREE" : col[rowIdx]}
               </div>
             ))}
           </div>
         ))}
       </div>
 
-      {bingo && (
+      <div className="controls">
+        <button onClick={() => claimBingo("line")} disabled={bingoClaimed}>
+          Claim Line BINGO
+        </button>
+        <button
+          onClick={() => claimBingo("full-house")}
+          disabled={bingoClaimed}
+        >
+          Claim Full House
+        </button>
+      </div>
+
+      {bingoClaimed && (
         <div className="bingo-message">
-          <div className="bingo-text">BINGO!</div>
-          <div className="pattern-text">{currentPattern.replace('-', ' ')}</div>
+          {winner === playerName ? (
+            <>
+              <h2>BINGO! You won with a {currentPattern}!</h2>
+              <p>Waiting for host to verify...</p>
+            </>
+          ) : (
+            <h2>
+              {winner} claims BINGO with a {currentPattern}!
+            </h2>
+          )}
         </div>
       )}
 
-      <button onClick={restartGame} className="restart-btn">
-        New Game
-      </button>
+      <div className="players-online">
+        {Object.keys(users).length > 0 && (
+          <div>
+            <h3>Players Online:</h3>
+            <ul>
+              {Object.keys(users).map((user) => (
+                <li key={user}>{user}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+const getBingoLetter = (number) => {
+  if (number <= 15) return "B";
+  if (number <= 30) return "I";
+  if (number <= 45) return "N";
+  if (number <= 60) return "G";
+  return "O";
 };
 
 export default App;
